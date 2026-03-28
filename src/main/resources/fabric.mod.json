@@ -13,6 +13,9 @@
   "entrypoints": {
     "main": [
       "com.skinnygnome.newswords.NewSwordsMod"
+    ],
+    "client": [
+      "com.skinnygnome.newswords.NewSwordsClient"
     ]
   },
   "depends": {

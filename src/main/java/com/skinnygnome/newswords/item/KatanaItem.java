@@ -2,7 +2,9 @@ package com.skinnygnome.newswords.item;
 
 import com.skinnygnome.newswords.NewSwordsMod;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.client.item.TooltipContext;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
@@ -15,7 +17,7 @@ import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
 public class KatanaItem extends SwordItem {
-    private static final int SPECTATOR_COOLDOWN_TICKS = 10 * 20;
+    private static final int SPECTATOR_COOLDOWN_TICKS = 20 * 20;
 
     public KatanaItem(ToolMaterial toolMaterial, int attackDamage, float attackSpeed, Settings settings) {
         super(toolMaterial, attackDamage, attackSpeed, settings);
@@ -39,6 +41,25 @@ public class KatanaItem extends SwordItem {
         }
 
         return TypedActionResult.success(stack, true);
+    }
+
+    @Override
+    public void inventoryTick(ItemStack stack, World world, Entity entity, int slot, boolean selected) {
+        if (!selected || world.isClient || !(entity instanceof ServerPlayerEntity player)) {
+            return;
+        }
+
+        float progress = player.getItemCooldownManager().getCooldownProgress(this, 0.0f);
+        if (progress <= 0.0f) {
+            return;
+        }
+
+        int remainingTicks = Math.max(1, Math.round(progress * SPECTATOR_COOLDOWN_TICKS));
+        if (remainingTicks % 4 == 0) {
+            double remainingSeconds = remainingTicks / 20.0;
+            String message = String.format(Locale.ROOT, "Spectate cooldown: %.1fs", remainingSeconds);
+            player.sendMessage(Text.literal(message), true);
+        }
     }
 
     @Override
