@@ -1,0 +1,5 @@
+{
+  "item.newswords.katana": "Katana",
+  "item.newswords.katana.tooltip.left": "Left Click: Dash forward and deal 5 damage",
+  "item.newswords.katana.tooltip.right": "Right Click: Spectator mode for 5s (10s cooldown)"
+}

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "newswords",
+  "version": "${version}",
+  "name": "New Swords",
+  "description": "Adds new swords, starting with a Katana.",
+  "authors": [
+    "SkinnyGnome"
+  ],
+  "contact": {},
+  "license": "All Rights Reserved",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.skinnygnome.newswords.NewSwordsMod"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.11",
+    "minecraft": "~1.20.1",
+    "java": ">=17",
+    "fabric-api": "*"
+  }
+}
