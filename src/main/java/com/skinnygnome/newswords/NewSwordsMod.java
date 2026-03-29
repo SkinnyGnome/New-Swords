@@ -1,6 +1,7 @@
 package com.skinnygnome.newswords;
 
 import com.skinnygnome.newswords.item.KatanaItem;
+import com.skinnygnome.newswords.item.LightblueDimensionSwordItem;
 import com.skinnygnome.newswords.item.RageSwordItem;
 import java.util.ArrayDeque;
 import java.util.HashMap;
@@ -32,8 +33,10 @@ import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.World;
 import org.slf4j.Logger;
@@ -52,10 +55,14 @@ public class NewSwordsMod implements ModInitializer {
     private static final float RAGE_EXPLOSION_DAMAGE_PER_POINT = 2.0f;
     private static final float RAGE_BASE_EXPLOSION_SIZE = 1.0f;
     private static final int RAGE_POINTS_PER_SPEED_LEVEL = 2;
+    private static final float LIGHTBLUE_DIMENSION_SWORD_DAMAGE = 10.0f;
+    private static final int LIGHTBLUE_PHASE_DURATION_TICKS = 5 * 20;
     public static final Identifier KATANA_DASH_PACKET_ID = new Identifier(MOD_ID, "katana_dash");
+    public static final Identifier LIGHTBLUE_PHASE_PACKET_ID = new Identifier(MOD_ID, "lightblue_phase");
 
     private static final Map<UUID, SpectatorState> SPECTATOR_PLAYERS = new HashMap<>();
     private static final Map<UUID, RageState> RAGE_STATES = new HashMap<>();
+    private static final Map<UUID, PhaseState> PHASE_STATES = new HashMap<>();
     private static long serverTickCounter = 0L;
 
     public static final Item KATANA = Registry.register(
@@ -64,17 +71,24 @@ public class NewSwordsMod implements ModInitializer {
             new KatanaItem(ToolMaterials.IRON, 3, -2.2f, new Item.Settings().maxCount(1))
     );
 
-        public static final Item RAGE_BLADE = Registry.register(
+    public static final Item RAGE_BLADE = Registry.register(
             Registries.ITEM,
             new Identifier(MOD_ID, "rage_blade"),
             new RageSwordItem(ToolMaterials.NETHERITE, 3, -2.4f, new Item.Settings().maxCount(1).fireproof())
-        );
+    );
+
+    public static final Item LIGHTBLUE_DIMENSION_SWORD = Registry.register(
+            Registries.ITEM,
+            new Identifier(MOD_ID, "lightblue_dimension_sword"),
+            new LightblueDimensionSwordItem(ToolMaterials.DIAMOND, 3, -2.4f, new Item.Settings().maxCount(1))
+    );
 
     @Override
     public void onInitialize() {
         ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT).register(entries -> {
             entries.add(KATANA);
             entries.add(RAGE_BLADE);
+            entries.add(LIGHTBLUE_DIMENSION_SWORD);
         });
 
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
@@ -87,6 +101,15 @@ public class NewSwordsMod implements ModInitializer {
             if (mainHandItem == KATANA) {
                 if (!world.isClient && entity instanceof LivingEntity livingEntity) {
                     livingEntity.damage(player.getDamageSources().playerAttack(player), KATANA_SPECIAL_DAMAGE);
+                    player.swingHand(hand, true);
+                }
+
+                return ActionResult.SUCCESS;
+            }
+
+            if (mainHandItem == LIGHTBLUE_DIMENSION_SWORD) {
+                if (!world.isClient && entity instanceof LivingEntity livingEntity) {
+                    livingEntity.damage(player.getDamageSources().playerAttack(player), LIGHTBLUE_DIMENSION_SWORD_DAMAGE);
                     player.swingHand(hand, true);
                 }
 
@@ -117,6 +140,13 @@ public class NewSwordsMod implements ModInitializer {
                 server.execute(() -> {
                     if (player.getMainHandStack().getItem() == KATANA) {
                         performKatanaDash(player);
+                    }
+                }));
+
+        ServerPlayNetworking.registerGlobalReceiver(LIGHTBLUE_PHASE_PACKET_ID, (server, player, handler, buf, responseSender) ->
+                server.execute(() -> {
+                    if (player.getMainHandStack().getItem() == LIGHTBLUE_DIMENSION_SWORD) {
+                        activateLightbluePhase(player);
                     }
                 }));
 
@@ -172,6 +202,28 @@ public class NewSwordsMod implements ModInitializer {
                     rageIterator.remove();
                 }
             }
+
+            Iterator<Map.Entry<UUID, PhaseState>> phaseIterator = PHASE_STATES.entrySet().iterator();
+            while (phaseIterator.hasNext()) {
+                Map.Entry<UUID, PhaseState> entry = phaseIterator.next();
+                PhaseState state = entry.getValue();
+                state.ticksRemaining--;
+
+                if (state.ticksRemaining > 0) {
+                    continue;
+                }
+
+                ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
+                if (player != null) {
+                    boolean invulnerableByGamemode = player.interactionManager.getGameMode() == GameMode.CREATIVE
+                            || player.interactionManager.getGameMode() == GameMode.SPECTATOR;
+                    player.getAbilities().invulnerable = state.originalInvulnerable || invulnerableByGamemode;
+                    player.sendAbilitiesUpdate();
+                    player.sendMessage(Text.literal("Dimension phase ended."), true);
+                }
+
+                phaseIterator.remove();
+            }
         });
 
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
@@ -181,6 +233,7 @@ public class NewSwordsMod implements ModInitializer {
             }
 
             RAGE_STATES.remove(handler.player.getUuid());
+            PHASE_STATES.remove(handler.player.getUuid());
         });
 
         LOGGER.info("New Swords initialized.");
@@ -239,6 +292,71 @@ public class NewSwordsMod implements ModInitializer {
         clearRagePoints(player.getUuid());
         player.sendMessage(Text.literal("Rage detonation!"), true);
         return true;
+    }
+
+    public static boolean teleportLightblueSwordUser(ServerPlayerEntity player) {
+        Vec3d look = player.getRotationVec(1.0f);
+        Vec3d rayTarget = player.getEyePos().add(look.multiply(48.0));
+        Vec3d targetPos = player.getWorld()
+                .raycast(new RaycastContext(
+                        player.getEyePos(),
+                        rayTarget,
+                        RaycastContext.ShapeType.COLLIDER,
+                        RaycastContext.FluidHandling.NONE,
+                        player
+                ))
+                .getPos();
+
+        BlockPos base = BlockPos.ofFloored(targetPos);
+        BlockPos safe = findSafeTeleportSpot(player.getServerWorld(), base.up());
+        if (safe == null) {
+            player.sendMessage(Text.literal("No safe teleport location found."), true);
+            return false;
+        }
+
+        Vec3d destination = Vec3d.ofBottomCenter(safe);
+        player.requestTeleport(destination.x, destination.y, destination.z);
+        player.velocityModified = true;
+
+        ServerWorld world = player.getServerWorld();
+        world.spawnParticles(ParticleTypes.SOUL_FIRE_FLAME, destination.x, destination.y + 1.0, destination.z, 30, 0.35, 0.45, 0.35, 0.01);
+        world.playSound(null, safe, SoundEvents.ENTITY_ENDERMAN_TELEPORT, SoundCategory.PLAYERS, 0.8f, 1.25f);
+        return true;
+    }
+
+    private static void activateLightbluePhase(ServerPlayerEntity player) {
+        UUID playerId = player.getUuid();
+        PhaseState existing = PHASE_STATES.get(playerId);
+        boolean originalInvulnerable = existing != null ? existing.originalInvulnerable : player.getAbilities().invulnerable;
+
+        player.getAbilities().invulnerable = true;
+        player.sendAbilitiesUpdate();
+        player.addStatusEffect(new StatusEffectInstance(StatusEffects.INVISIBILITY, LIGHTBLUE_PHASE_DURATION_TICKS, 0, true, false, true));
+        player.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, LIGHTBLUE_PHASE_DURATION_TICKS, 2, true, false, true));
+        PHASE_STATES.put(playerId, new PhaseState(originalInvulnerable, LIGHTBLUE_PHASE_DURATION_TICKS));
+        player.sendMessage(Text.literal("Dimension phase active for 5 seconds."), true);
+    }
+
+    private static BlockPos findSafeTeleportSpot(ServerWorld world, BlockPos start) {
+        int minY = world.getBottomY() + 1;
+        int maxY = world.getTopY() - 2;
+        int x = start.getX();
+        int z = start.getZ();
+
+        int clampedStartY = Math.max(minY, Math.min(start.getY(), maxY));
+        for (int y = clampedStartY; y <= Math.min(clampedStartY + 8, maxY); y++) {
+            BlockPos feet = new BlockPos(x, y, z);
+            BlockPos head = feet.up();
+            BlockPos ground = feet.down();
+            boolean hasSpace = world.getBlockState(feet).isAir() && world.getBlockState(head).isAir();
+            boolean hasGround = !world.getBlockState(ground).isAir();
+
+            if (hasSpace && hasGround) {
+                return feet;
+            }
+        }
+
+        return null;
     }
 
     private static int getRagePoints(UUID playerId) {
@@ -317,6 +435,16 @@ public class NewSwordsMod implements ModInitializer {
 
         private void clear() {
             pointExpiryTicks.clear();
+        }
+    }
+
+    private static final class PhaseState {
+        private final boolean originalInvulnerable;
+        private int ticksRemaining;
+
+        private PhaseState(boolean originalInvulnerable, int ticksRemaining) {
+            this.originalInvulnerable = originalInvulnerable;
+            this.ticksRemaining = ticksRemaining;
         }
     }
 }

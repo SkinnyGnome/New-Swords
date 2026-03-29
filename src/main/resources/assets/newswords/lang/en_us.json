@@ -4,5 +4,11 @@
   "item.newswords.katana.tooltip.right": "Right Click: Spectator mode for 10s (20s cooldown)",
   "item.newswords.rage_blade": "Ragefire Blade",
   "item.newswords.rage_blade.tooltip.left": "Left Click: 5 base damage (+1 per rage point)",
-  "item.newswords.rage_blade.tooltip.right": "Right Click: Fire explosion (2 damage per point, consumes all points)"
+  "item.newswords.rage_blade.tooltip.right": "Right Click: Fire explosion (2 damage per point, consumes all points)",
+  "item.newswords.lightblue_dimension_sword": "Lightblue Dimension Sword",
+  "item.newswords.lightblue_dimension_sword.tooltip.left": "Left Click: Deal 10 damage",
+  "item.newswords.lightblue_dimension_sword.tooltip.right": "Right Click: Teleport to your cursor",
+  "item.newswords.lightblue_dimension_sword.tooltip.r": "Press R: Invisibility + Invincibility + Speed III for 5s",
+  "key.newswords.dimension_phase": "Dimension Phase",
+  "category.newswords.abilities": "New Swords"
 }
