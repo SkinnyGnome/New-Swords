@@ -1,5 +1,8 @@
 {
   "item.newswords.katana": "Katana",
   "item.newswords.katana.tooltip.left": "Left Click: Dash forward and deal 5 damage",
-  "item.newswords.katana.tooltip.right": "Right Click: Spectator mode for 10s (20s cooldown)"
+  "item.newswords.katana.tooltip.right": "Right Click: Spectator mode for 10s (20s cooldown)",
+  "item.newswords.rage_blade": "Ragefire Blade",
+  "item.newswords.rage_blade.tooltip.left": "Left Click: 5 base damage (+1 per rage point)",
+  "item.newswords.rage_blade.tooltip.right": "Right Click: Fire explosion (2 damage per point, consumes all points)"
 }

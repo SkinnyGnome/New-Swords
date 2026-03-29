@@ -1,8 +1,11 @@
 package com.skinnygnome.newswords;
 
 import com.skinnygnome.newswords.item.KatanaItem;
+import com.skinnygnome.newswords.item.RageSwordItem;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import net.fabricmc.api.ModInitializer;
@@ -24,11 +27,15 @@ import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
+import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,9 +45,18 @@ public class NewSwordsMod implements ModInitializer {
 
     private static final int SPECTATOR_DURATION_TICKS = 10 * 20;
     private static final float KATANA_SPECIAL_DAMAGE = 5.0f;
+    private static final int RAGE_POINT_DURATION_TICKS = 10 * 20;
+    private static final int RAGE_MAX_POINTS = 10;
+    private static final float RAGE_BASE_DAMAGE = 5.0f;
+    private static final float RAGE_DAMAGE_PER_POINT = 1.0f;
+    private static final float RAGE_EXPLOSION_DAMAGE_PER_POINT = 2.0f;
+    private static final float RAGE_BASE_EXPLOSION_SIZE = 1.0f;
+    private static final int RAGE_POINTS_PER_SPEED_LEVEL = 2;
     public static final Identifier KATANA_DASH_PACKET_ID = new Identifier(MOD_ID, "katana_dash");
 
     private static final Map<UUID, SpectatorState> SPECTATOR_PLAYERS = new HashMap<>();
+    private static final Map<UUID, RageState> RAGE_STATES = new HashMap<>();
+    private static long serverTickCounter = 0L;
 
     public static final Item KATANA = Registry.register(
             Registries.ITEM,
@@ -48,18 +64,50 @@ public class NewSwordsMod implements ModInitializer {
             new KatanaItem(ToolMaterials.IRON, 3, -2.2f, new Item.Settings().maxCount(1))
     );
 
+        public static final Item RAGE_BLADE = Registry.register(
+            Registries.ITEM,
+            new Identifier(MOD_ID, "rage_blade"),
+            new RageSwordItem(ToolMaterials.NETHERITE, 3, -2.4f, new Item.Settings().maxCount(1).fireproof())
+        );
+
     @Override
     public void onInitialize() {
-        ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT).register(entries -> entries.add(KATANA));
+        ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT).register(entries -> {
+            entries.add(KATANA);
+            entries.add(RAGE_BLADE);
+        });
 
         AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-            if (hand != Hand.MAIN_HAND || player.getMainHandStack().getItem() != KATANA) {
+            if (hand != Hand.MAIN_HAND) {
+                return ActionResult.PASS;
+            }
+
+            Item mainHandItem = player.getMainHandStack().getItem();
+
+            if (mainHandItem == KATANA) {
+                if (!world.isClient && entity instanceof LivingEntity livingEntity) {
+                    livingEntity.damage(player.getDamageSources().playerAttack(player), KATANA_SPECIAL_DAMAGE);
+                    player.swingHand(hand, true);
+                }
+
+                return ActionResult.SUCCESS;
+            }
+
+            if (mainHandItem != RAGE_BLADE) {
                 return ActionResult.PASS;
             }
 
             if (!world.isClient && entity instanceof LivingEntity livingEntity) {
-                livingEntity.damage(player.getDamageSources().playerAttack(player), KATANA_SPECIAL_DAMAGE);
+                int points = getRagePoints(player.getUuid());
+                float damage = RAGE_BASE_DAMAGE + (points * RAGE_DAMAGE_PER_POINT);
+
+                livingEntity.damage(player.getDamageSources().playerAttack(player), damage);
                 player.swingHand(hand, true);
+
+                if (!livingEntity.isAlive()) {
+                    addRagePoint(player.getUuid());
+                    player.sendMessage(Text.literal("Rage +1 (" + getRagePoints(player.getUuid()) + "/" + RAGE_MAX_POINTS + ")"), true);
+                }
             }
 
             return ActionResult.SUCCESS;
@@ -73,6 +121,8 @@ public class NewSwordsMod implements ModInitializer {
                 }));
 
         ServerTickEvents.END_SERVER_TICK.register(server -> {
+            serverTickCounter++;
+
             Iterator<Map.Entry<UUID, SpectatorState>> iterator = SPECTATOR_PLAYERS.entrySet().iterator();
             while (iterator.hasNext()) {
                 Map.Entry<UUID, SpectatorState> entry = iterator.next();
@@ -95,6 +145,33 @@ public class NewSwordsMod implements ModInitializer {
 
                 iterator.remove();
             }
+
+            Iterator<Map.Entry<UUID, RageState>> rageIterator = RAGE_STATES.entrySet().iterator();
+            while (rageIterator.hasNext()) {
+                Map.Entry<UUID, RageState> entry = rageIterator.next();
+                RageState state = entry.getValue();
+                state.pruneExpired(serverTickCounter);
+
+                ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
+                if (player != null) {
+                    int points = state.getPoints(serverTickCounter);
+                    if (points > 0 && player.getMainHandStack().getItem() == RAGE_BLADE) {
+                        int speedLevels = points / RAGE_POINTS_PER_SPEED_LEVEL;
+                        if (speedLevels > 0) {
+                            player.addStatusEffect(new StatusEffectInstance(StatusEffects.SPEED, 25, speedLevels - 1, true, false, true));
+                        }
+
+                        if (serverTickCounter % 10 == 0) {
+                            int speedBonus = points / RAGE_POINTS_PER_SPEED_LEVEL;
+                            player.sendMessage(Text.literal("Rage: " + points + "/" + RAGE_MAX_POINTS + " | +" + points + " dmg | Speed " + speedBonus), true);
+                        }
+                    }
+                }
+
+                if (state.isEmpty(serverTickCounter)) {
+                    rageIterator.remove();
+                }
+            }
         });
 
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
@@ -102,6 +179,8 @@ public class NewSwordsMod implements ModInitializer {
             if (state != null && handler.player.interactionManager.getGameMode() == GameMode.SPECTATOR) {
                 handler.player.interactionManager.changeGameMode(state.previousGameMode);
             }
+
+            RAGE_STATES.remove(handler.player.getUuid());
         });
 
         LOGGER.info("New Swords initialized.");
@@ -121,6 +200,66 @@ public class NewSwordsMod implements ModInitializer {
         SPECTATOR_PLAYERS.put(player.getUuid(), new SpectatorState(currentGameMode, SPECTATOR_DURATION_TICKS));
         player.sendMessage(Text.literal("Katana spectate active for 10 seconds."), true);
         return true;
+    }
+
+    public static boolean triggerRageExplosion(ServerPlayerEntity player) {
+        int points = getRagePoints(player.getUuid());
+        if (points <= 0) {
+            player.sendMessage(Text.literal("No rage points to detonate."), true);
+            return false;
+        }
+
+        float explosionSize = RAGE_BASE_EXPLOSION_SIZE + (points / 2.0f);
+        float explosionDamage = points * RAGE_EXPLOSION_DAMAGE_PER_POINT;
+
+        ServerWorld world = player.getServerWorld();
+        Vec3d center = player.getPos().add(0.0, 1.0, 0.0);
+        world.createExplosion(player, center.x, center.y, center.z, explosionSize, true, World.ExplosionSourceType.NONE);
+
+        double radius = Math.max(2.5, explosionSize * 2.0);
+        Box damageBox = new Box(
+                center.x - radius,
+                center.y - radius,
+                center.z - radius,
+                center.x + radius,
+                center.y + radius,
+                center.z + radius
+        );
+
+        List<LivingEntity> targets = world.getEntitiesByClass(
+                LivingEntity.class,
+                damageBox,
+                target -> target.isAlive() && target != player && target.squaredDistanceTo(center) <= radius * radius
+        );
+
+        for (LivingEntity target : targets) {
+            target.damage(player.getDamageSources().playerAttack(player), explosionDamage);
+        }
+
+        clearRagePoints(player.getUuid());
+        player.sendMessage(Text.literal("Rage detonation!"), true);
+        return true;
+    }
+
+    private static int getRagePoints(UUID playerId) {
+        RageState state = RAGE_STATES.get(playerId);
+        if (state == null) {
+            return 0;
+        }
+
+        return state.getPoints(serverTickCounter);
+    }
+
+    private static void addRagePoint(UUID playerId) {
+        RageState state = RAGE_STATES.computeIfAbsent(playerId, uuid -> new RageState());
+        state.addPoint(serverTickCounter + RAGE_POINT_DURATION_TICKS);
+    }
+
+    private static void clearRagePoints(UUID playerId) {
+        RageState state = RAGE_STATES.get(playerId);
+        if (state != null) {
+            state.clear();
+        }
     }
 
     private static void performKatanaDash(PlayerEntity player) {
@@ -147,6 +286,37 @@ public class NewSwordsMod implements ModInitializer {
         private SpectatorState(GameMode previousGameMode, int ticksRemaining) {
             this.previousGameMode = previousGameMode;
             this.ticksRemaining = ticksRemaining;
+        }
+    }
+
+    private static final class RageState {
+        private final ArrayDeque<Long> pointExpiryTicks = new ArrayDeque<>();
+
+        private int getPoints(long currentTick) {
+            pruneExpired(currentTick);
+            return pointExpiryTicks.size();
+        }
+
+        private boolean isEmpty(long currentTick) {
+            return getPoints(currentTick) == 0;
+        }
+
+        private void addPoint(long expiryTick) {
+            if (pointExpiryTicks.size() >= RAGE_MAX_POINTS) {
+                return;
+            }
+
+            pointExpiryTicks.addLast(expiryTick);
+        }
+
+        private void pruneExpired(long currentTick) {
+            while (!pointExpiryTicks.isEmpty() && pointExpiryTicks.peekFirst() <= currentTick) {
+                pointExpiryTicks.removeFirst();
+            }
+        }
+
+        private void clear() {
+            pointExpiryTicks.clear();
         }
     }
 }
